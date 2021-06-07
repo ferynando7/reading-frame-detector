@@ -5,10 +5,10 @@ import numpy as np
 from csv import reader
 from torch.utils.data import DataLoader
 
-#logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
 # Load 34 layer model
-model, alphabet = esm.pretrained.esm1_t34_670M_UR50S()
+model, alphabet = esm.pretrained.esm1_t34_670M_UR50S() # load_model_and_alphabet("data/esm1b_t33_650M_UR50S.pt")
 batch_converter = alphabet.get_batch_converter()
 
 # Prepare data (two protein sequences)
@@ -24,7 +24,7 @@ logging.info(data[:2])
 
 batch_labels, batch_strs, batch_tokens = batch_converter(data)
 
-logging.info(batch_tokens.shape)
+logging.info("Batch tokens " + str(batch_tokens.shape))
 
 
 # Extract per-residue embeddings (on CPU)
