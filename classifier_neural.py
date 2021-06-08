@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 import logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 
 class FrameClassifier(nn.Module):
@@ -36,7 +36,12 @@ logging.info("FB_ESM params: " + str(pytorch_total_params) + ", " + str(pytorch_
 
 
 # Create the classifier
+device = "cuda:0"
+
+model.to(device)
 classifier = FrameClassifier(model)
+
+classifier.to(device)
 
 pytorch_total_params = sum(p.numel() for p in classifier.parameters())
 pytorch_total_params_train = sum(p.numel() for p in classifier.parameters() if p.requires_grad)
@@ -52,6 +57,8 @@ with open('data/only_classifier.csv', 'r') as read_obj:
     # Get all rows of csv from csv_reader object as list of tuples
     data = list(map(tuple, csv_reader))[:20000]
 
+logging.info("Data size: " + str(len(data)))
+
 data_train, data_val = train_test_split(data, test_size=0.2, shuffle = True)
 
 
@@ -64,23 +71,30 @@ optimizer = th.optim.Adam(classifier.parameters(), lr=lr, weight_decay=l2norm)
 
 batch_train = DataLoader(data_train, batch_size=64, shuffle=False)
 
+
+
 for epoch in range(n_epochs):
 
-    for batch in batch_train:
-        optimizer.zero_grad()
-        batch_labels, batch_strs, batch_tokens = batch_converter(batch)
+#    for batch in batch_train:
 
-        preds = classifier(batch_tokens)
 
-        loss = F.cross_entropy(preds, batch_labels)
-        loss.backward()
+    # logging.debug("Batch shape: " + str(type(batch[0])))
+    # logging.debug("Batch shape: " + str(type(batch[1])))
+    optimizer.zero_grad()
+    batch_labels, batch_strs, batch_tokens = batch_converter(data_train)
 
-        optimizer.step()
+    batch_tokens.to(device)
+    preds = classifier(batch_tokens)
 
-        train_acc = torch.sum(preds.argmax(dim=1) == batch_labels)
-        train_acc = train_acc.item() / batch_size
-        print("Epoch {:05d} | ".format(epoch) +
-            "Train Accuracy: {:.4f} | Train Loss: {:.4f} | ".format(
-                train_acc, loss.item()) +
-            "Validation Accuracy: {:.4f} | Validation loss: {:.4f}".format(
-                val_acc, val_loss.item()))
+    loss = F.cross_entropy(preds, batch_labels)
+    loss.backward()
+
+    optimizer.step()
+
+    train_acc = torch.sum(preds.argmax(dim=1) == batch_labels)
+    train_acc = train_acc.item() / batch_size
+    print("Epoch {:05d} | ".format(epoch) +
+        "Train Accuracy: {:.4f} | Train Loss: {:.4f} | ".format(
+            train_acc, loss.item()) +
+        "Validation Accuracy: {:.4f} | Validation loss: {:.4f}".format(
+            val_acc, val_loss.item()))
