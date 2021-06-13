@@ -11,15 +11,12 @@ logging.basicConfig(level=logging.DEBUG)
 
 
 class FrameClassifier(nn.Module):
-    def __init__(self, FB_ESM):
+    def __init__(self, FB_ESM, dropout = 0.1):
         super(FrameClassifier, self).__init__()
 
         self.embedding = FB_ESM
-
-        logging.debug("FB embed dim: " + str(self.embedding.args.embed_dim))
-
         self.classifier = nn.Linear(self.embedding.args.embed_dim,2)
-
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, data):
 
@@ -32,12 +29,11 @@ class FrameClassifier(nn.Module):
             sequence_representations.append(x[i, 1 : len(seq) + 1].mean(0))
 
         x = th.stack(sequence_representations)
-        logging.debug("X shape: " + str(x.shape))
-
+       
         x = self.classifier(x)
-        logging.debug("X shape: " + str(x.shape))
-
-        return F.softmax(x)
+        x = F.softmax(x)
+        x = self.dropout(x)
+        return x
 
 ## Load FB-ESM model
 model, alphabet = load_model_and_alphabet("data/esm1b_t33_650M_UR50S.pt")
@@ -77,7 +73,7 @@ def load_data(path):
         # pass the file object to reader() to get the reader object
         csv_reader = reader(read_obj)
         # Get all rows of csv from csv_reader object as list of tuples
-        data = list(map(tuple, csv_reader))[:1000]
+        data = list(map(tuple, csv_reader))[:20000]
 
     logging.info("Data size: " + str(len(data)))
 
