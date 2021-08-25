@@ -4,8 +4,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from csv import reader
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader
+from sklearn.metrics import roc_curve, auc, matthews_corrcoef
+import numpy as np
 
+from torch.utils.data import DataLoader
+import pandas as pd
 import logging
 logging.basicConfig(level=logging.DEBUG)
 
@@ -15,7 +18,7 @@ class FrameClassifier(nn.Module):
         super(FrameClassifier, self).__init__()
 
         self.embedding = FB_ESM
-        self.classifier = nn.Linear(self.embedding.args.embed_dim,2)
+        self.classifier = nn.Linear(self.embedding.args.embed_dim,1)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, data):
@@ -31,8 +34,10 @@ class FrameClassifier(nn.Module):
         x = th.stack(sequence_representations)
        
         x = self.classifier(x)
-        x = F.softmax(x)
         x = self.dropout(x)
+        x = th.sigmoid(x)
+        logging.debug(f"X shape: {x.shape}")
+        logging.debug(f"max and min:  {th.max(x)}, {th.min(x)}")
         return x
 
 ## Load FB-ESM model
@@ -45,10 +50,30 @@ pytorch_total_params_train = sum(p.numel() for p in model.parameters() if p.requ
 logging.info("FB_ESM params: " + str(pytorch_total_params) + ", " + str(pytorch_total_params_train))
 
 
+def compute_roc(labels, preds):
+    # Compute ROC curve and ROC area for each class
+    fpr, tpr, _ = roc_curve(labels.flatten(), preds.flatten())
+    roc_auc = auc(fpr, tpr)
 
+    return roc_auc
+
+# Prepare the data
+def load_data(path):
+
+    with open(path, 'r') as read_obj:
+        # pass the file object to reader() to get the reader object
+        csv_reader = reader(read_obj)
+        # Get all rows of csv from csv_reader object as list of tuples
+        data = list(map(tuple, csv_reader))[:200000]
+
+    logging.info("Data size: " + str(len(data)))
+
+    return train_test_split(data, test_size=0.2, shuffle = True)
+
+data_train, data_test = load_data('data/only_classifier.csv')
 
 # Create the classifier
-device = "cuda:0"
+device = "cpu" # "cuda:0"
 
 model.to(device)
 
@@ -66,20 +91,7 @@ pytorch_total_params_train = sum(p.numel() for p in classifier.parameters() if p
 logging.info("Classifier params: " + str(pytorch_total_params) + ", " + str(pytorch_total_params_train))
 
 
-# Prepare the data
-def load_data(path):
 
-    with open(path, 'r') as read_obj:
-        # pass the file object to reader() to get the reader object
-        csv_reader = reader(read_obj)
-        # Get all rows of csv from csv_reader object as list of tuples
-        data = list(map(tuple, csv_reader))[:20000]
-
-    logging.info("Data size: " + str(len(data)))
-
-    return train_test_split(data, test_size=0.2, shuffle = True)
-
-data_train, data_test = load_data('data/only_classifier.csv')
 
 
 # Train 
@@ -87,7 +99,7 @@ lr = 1e-4
 l2norm = 0
 n_epochs = 20
 batch_size = 64
-
+loss_func = nn.BCELoss()
 optimizer = th.optim.Adam(classifier.parameters(), lr=lr, weight_decay=l2norm)
 
 
@@ -114,19 +126,23 @@ for epoch in range(n_epochs):
         batch_tokens = batch_tokens.to(device)
 
         batch_labels = list(map(int, batch_labels))
-        batch_labels = th.tensor(batch_labels).to(device)
+        batch_labels = th.FloatTensor(batch_labels).unsqueeze(1).to(device)
+        logging.debug(f"labels preds: {batch_labels.shape}" )
 
         optimizer.zero_grad()
         
         preds = classifier(batch_tokens, batch)
 
-        loss = F.cross_entropy(preds, batch_labels)
+        logging.debug(f"size preds: {preds.squeeze().shape}" )
+       
+        loss = loss_func(preds, batch_labels) #F.cross_entropy(preds, batch_labels)
+        
         loss.backward()
         optimizer.step()
 
         train_loss += loss.item()
-        acc = th.sum(preds.argmax(dim=1) == batch_labels)
-        train_acc += acc.item()
+#        acc = th.sum(preds.argmax(dim=1) == batch_labels)
+#        train_acc += acc.item()
 
         train_total += batch_labels.size(0)
 
@@ -137,6 +153,8 @@ for epoch in range(n_epochs):
     val_total = 0
     val_steps = 0
 
+    val_labels = []
+    val_preds = []
     for batch in val_dataloader:
         with th.no_grad():
             val_steps += 1
@@ -147,31 +165,41 @@ for epoch in range(n_epochs):
             batch_tokens = batch_tokens.to(device)
 
             batch_labels = list(map(int, batch_labels))
-            batch_labels = th.tensor(batch_labels).to(device)
+            batch_labels = th.FloatTensor(batch_labels).unsqueeze(1).to(device)
             
             preds = classifier(batch_tokens, batch)
 
-            loss = F.cross_entropy(preds, batch_labels)
+            loss = loss_func(preds, batch_labels) #F.cross_entropy(preds, batch_labels)
 
             val_loss += loss.item()
-            acc = th.sum(preds.argmax(dim=1) == batch_labels)
-            val_acc += acc.item()
+          #  acc = th.sum(preds.argmax(dim=1) == batch_labels)
+          #  val_acc += acc.item()
 
             val_total += batch_labels.size(0)
+            
+            val_labels = np.append(val_labels, batch_labels.cpu())
+            val_preds = np.append(val_preds, preds.cpu())
 
     if best_loss > val_loss/val_steps:
         best_loss = val_loss/val_steps
-        th.save(classifier.state_dict(), 'model.pth')
+        th.save(classifier, 'model.pt')
+#        th.save(classifier.state_dict(), 'model.pth')
 
+    # print("Epoch {:05d} | ".format(epoch) +
+    #     "Train Accuracy: {:.4f} | Train Loss: {:.4f} | ".format(
+    #         train_acc/ train_total, train_loss/epoch_steps) +
+    #         "Validation Accuracy: {:.4f} | Validation loss: {:.4f}".format(
+    #             val_acc/val_total, val_loss/val_steps))
+
+    roc_auc = compute_roc(val_labels, val_preds)
     print("Epoch {:05d} | ".format(epoch) +
-        "Train Accuracy: {:.4f} | Train Loss: {:.4f} | ".format(
-            train_acc/ train_total, train_loss/epoch_steps) +
-            "Validation Accuracy: {:.4f} | Validation loss: {:.4f}".format(
-                val_acc/val_total, val_loss/val_steps))
+        "Train Loss: {:.4f} | ".format(
+            train_loss/epoch_steps) +
+            "Validation loss: {:.4f} | ".format(
+                val_acc/val_total, val_loss/val_steps) + "AUC: {:.4f}".format(roc_auc))
 
-
-
-classifier.load_state_dict(th.load('model.pth'))
+#classifier.load_state_dict(th.load('model.pth'))
+classifier = th.load('model.pt')
 th.set_grad_enabled(False)
 classifier.eval()
 
@@ -181,26 +209,38 @@ test_loss = 0
 test_acc = 0
 test_total = 0
 test_steps = 0
-for batch in test_dataloader:
-    test_steps += 1
+all_labels = []
+all_preds = []
+with th.no_grad():
+    for batch in test_dataloader:
+        test_steps += 1
 
-    batch = list(zip(*batch))
-    batch_labels, batch_strs, batch_tokens = batch_converter(batch)
+        batch = list(zip(*batch))
+        batch_labels, batch_strs, batch_tokens = batch_converter(batch)
 
-    batch_tokens = batch_tokens.to(device)
+        batch_tokens = batch_tokens.to(device)
 
-    batch_labels = list(map(int, batch_labels))
-    batch_labels = th.tensor(batch_labels).to(device)
+        batch_labels = list(map(int, batch_labels))
+        batch_labels = th.FloatTensor(batch_labels).unsqueeze(1).to(device)
 
-    preds = classifier(batch_tokens, batch)
+        preds = classifier(batch_tokens, batch)
+        loss = loss_func(preds, batch_labels)
+      
+        all_labels = np.append(all_labels, batch_labels.cpu())
+        all_preds = np.append(all_preds, preds.cpu())
+      
+        test_loss += loss.item()
+        #acc = th.sum(preds.argmax(dim=1) == batch_labels)
+        #test_acc += acc.item()
 
-    loss = F.cross_entropy(preds, batch_labels)
+        test_total += batch_labels.size(0)
 
-    test_loss += loss.item()
-    acc = th.sum(preds.argmax(dim=1) == batch_labels)
-    test_acc += acc.item()
 
-    test_total += batch_labels.size(0)
+    roc_auc = compute_roc(all_labels, all_preds)
 
-print("Test Accuracy: {:.4f} | Test Loss: {:.4f} | ".format(
-        test_acc/ test_total, test_loss/test_steps))
+   
+
+    print("Test Loss: {:.4f} | AUC: {:.4f}".format(
+         test_loss/test_steps, roc_auc))
+
+
