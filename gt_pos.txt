@@ -1,0 +1,8 @@
+ID: NC_000913.3
+Name: <unknown name>
+Description: <unknown description>
+Number of features: 4728
+/gff-version=['3']
+/sequence-region=[('NC_000913.3', 0, 4641652)]
+/species=['https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=511145']
+UnknownSeq(4641652, character='?')
